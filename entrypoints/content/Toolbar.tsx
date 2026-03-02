@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { cn } from "@/lib/cn";
 
 type Mode = "off" | "spacing" | "contrast" | "radius";
 
@@ -16,7 +17,6 @@ export default function Toolbar({ initialMode, onModeChange }: ToolbarProps) {
     setEnabled(initialMode !== "off");
   }, [initialMode]);
 
-  // Listen for mode changes from popup
   useEffect(() => {
     const handler = (msg: unknown) => {
       const data = msg as { type?: string; mode?: Mode };
@@ -54,63 +54,84 @@ export default function Toolbar({ initialMode, onModeChange }: ToolbarProps) {
 
   if (!enabled) {
     return (
-      <div className="spacer-toolbar-anchor">
-        <button
-          className="spacer-badge"
-          onClick={handleToggle}
-          aria-label="Enable Spacer"
-        >
-          <span className="spacer-badge-dot" />
-          <span>Spacer</span>
-        </button>
-      </div>
+      <button
+        className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-950 px-3.5 py-1.5 text-[11px] text-zinc-500 shadow-lg select-none hover:border-zinc-700 hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
+        onClick={handleToggle}
+        aria-label="Enable Spacer"
+      >
+        <span className="size-1.5 rounded-full bg-zinc-500" />
+        <span>Spacer</span>
+      </button>
     );
   }
 
   return (
-    <div className="spacer-toolbar-anchor">
-      <div
-        className="spacer-toolbar"
-        role="toolbar"
-        aria-label="Spacer toolbar"
+    <div
+      className="flex items-center gap-0.5 rounded-xl border border-zinc-800 bg-zinc-950 p-1 font-sans text-xs text-zinc-200 shadow-lg select-none"
+      role="toolbar"
+      aria-label="Spacer toolbar"
+    >
+      <button
+        className={cn(
+          "flex size-7 cursor-pointer items-center justify-center rounded-lg",
+          "hover:bg-zinc-800 hover:text-zinc-200",
+          "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-orange-500",
+          enabled ? "text-green-500" : "text-zinc-500",
+        )}
+        onClick={handleToggle}
+        aria-label="Disable Spacer"
+        aria-pressed={enabled}
       >
-        <button
-          className="spacer-power-btn"
-          data-active={enabled}
-          onClick={handleToggle}
-          aria-label="Disable Spacer"
-          aria-pressed={enabled}
-        >
-          <PowerIcon />
-        </button>
+        <PowerIcon />
+      </button>
 
-        <span className="spacer-divider" />
+      <span className="mx-0.5 h-5 w-px shrink-0 bg-zinc-800" />
 
-        <button
-          className="spacer-btn"
-          data-active={mode === "spacing"}
-          onClick={() => handleMode("spacing")}
-          aria-pressed={mode === "spacing"}
-        >
-          <span className="spacer-btn-icon">
-            <SpacingIcon />
-          </span>
-          Spacing
-        </button>
+      <ToolbarButton
+        active={mode === "spacing"}
+        onClick={() => handleMode("spacing")}
+        icon={<SpacingIcon />}
+        label="Spacing"
+      />
 
-        <button
-          className="spacer-btn"
-          data-active={mode === "radius"}
-          onClick={() => handleMode("radius")}
-          aria-pressed={mode === "radius"}
-        >
-          <span className="spacer-btn-icon">
-            <RadiusIcon />
-          </span>
-          Radius
-        </button>
-      </div>
+      <ToolbarButton
+        active={mode === "radius"}
+        onClick={() => handleMode("radius")}
+        icon={<RadiusIcon />}
+        label="Radius"
+      />
     </div>
+  );
+}
+
+function ToolbarButton({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      className={cn(
+        "flex cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium leading-none whitespace-nowrap",
+        "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-orange-500",
+        active
+          ? "bg-orange-500/12 text-orange-500"
+          : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200",
+      )}
+      onClick={onClick}
+      aria-pressed={active}
+    >
+      <span className="flex size-4 shrink-0 items-center justify-center">
+        {icon}
+      </span>
+      {label}
+    </button>
   );
 }
 

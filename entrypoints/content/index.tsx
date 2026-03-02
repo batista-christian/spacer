@@ -37,6 +37,44 @@ export default defineContentScript({
             "display:contents !important;overflow:visible !important;";
         }
 
+        // ── Tailwind v4 @property fix for shadow DOM ──
+        // @property declarations don't work inside shadow roots.
+        // Extract them from the shadow stylesheet and:
+        // 1. Register them globally on the document
+        // 2. Inject their initial values as CSS variables on :host
+        for (const sheet of shadow.styleSheets) {
+          const propertyRules: string[] = [];
+          const initialValues: string[] = [];
+          try {
+            for (const rule of sheet.cssRules) {
+              if (rule instanceof CSSPropertyRule) {
+                propertyRules.push(rule.cssText);
+                if (rule.initialValue) {
+                  initialValues.push(`${rule.name}: ${rule.initialValue}`);
+                }
+              }
+            }
+          } catch {
+            // cross-origin stylesheet, skip
+          }
+          if (propertyRules.length > 0) {
+            // Push @property rules to document scope where they actually work
+            const globalSheet = new CSSStyleSheet();
+            for (const text of propertyRules) {
+              globalSheet.insertRule(text);
+            }
+            document.adoptedStyleSheets = [
+              ...document.adoptedStyleSheets,
+              globalSheet,
+            ];
+            // Also set initial values as regular variables on :host
+            // so elements inside the shadow root inherit them
+            if (initialValues.length > 0) {
+              sheet.insertRule(`:host { ${initialValues.join("; ")} }`);
+            }
+          }
+        }
+
         // Fixed positioning lives here, inside the shadow root where page styles can't touch it
         const wrapper = document.createElement("div");
         wrapper.style.cssText =

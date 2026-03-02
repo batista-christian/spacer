@@ -1,7 +1,11 @@
 import { defineConfig } from "wxt";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   modules: ["@wxt-dev/module-react", "@wxt-dev/auto-icons"],
+  vite: () => ({
+    plugins: [tailwindcss() as any],
+  }),
   autoIcons: {
     baseIconPath: "public/icon/128.svg",
     sizes: [16, 32, 48, 128],
