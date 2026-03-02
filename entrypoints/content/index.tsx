@@ -1,12 +1,75 @@
+import "./toolbar.css";
+import ReactDOM from "react-dom/client";
+import Toolbar from "./Toolbar";
+
 export default defineContentScript({
   matches: ["<all_urls>"],
   runAt: "document_idle",
+  cssInjectionMode: "ui",
 
-  main(ctx) {
+  async main(ctx) {
     let mode: "off" | "spacing" | "contrast" | "radius" = "off";
     let overlay: HTMLDivElement | null = null;
     let tooltip: HTMLDivElement | null = null;
     let lastTarget: Element | null = null;
+    let radiusAbort = false;
+
+    // ── Toolbar UI via Shadow DOM ──
+    const toolbarUi = await createShadowRootUi(ctx, {
+      name: "spacer-toolbar",
+      position: "inline",
+      anchor: "body",
+      onMount(container, shadow, shadowHost) {
+        // Host is just a pass-through — no positioning here so page CSS can't break it
+        shadowHost.style.cssText =
+          "display:block;position:static;width:0;height:0;overflow:visible;pointer-events:none;";
+
+        // Inner html/body wrappers: invisible to layout
+        for (const tag of ["html", "head", "body"] as const) {
+          const el = shadow.querySelector(tag) as HTMLElement | null;
+          if (el) {
+            el.style.cssText =
+              "display:contents !important;overflow:visible !important;";
+          }
+        }
+        if (container instanceof HTMLElement) {
+          container.style.cssText =
+            "display:contents !important;overflow:visible !important;";
+        }
+
+        // Fixed positioning lives here, inside the shadow root where page styles can't touch it
+        const wrapper = document.createElement("div");
+        wrapper.style.cssText =
+          "position:fixed;top:4px;left:4px;z-index:9999999;pointer-events:auto;";
+        container.append(wrapper);
+        const root = ReactDOM.createRoot(wrapper);
+        root.render(
+          <Toolbar
+            initialMode={mode}
+            onModeChange={(newMode) => {
+              activate(newMode);
+              browser.runtime
+                .sendMessage({ type: "SYNC_MODE", mode: newMode })
+                .catch(() => {});
+            }}
+          />,
+        );
+        return root;
+      },
+      onRemove(root) {
+        root?.unmount();
+      },
+    });
+
+    toolbarUi.mount();
+
+    // ── Helpers ──
+    /** Returns true if the element belongs to the toolbar shadow host */
+    function isToolbarElement(el: Element | null): boolean {
+      if (!el) return true;
+      const host = toolbarUi.shadowHost;
+      return el === host || host.contains(el);
+    }
 
     // ── Overlay container ──
     function ensureOverlay() {
@@ -65,7 +128,6 @@ export default defineContentScript({
       const pb = parseFloat(cs.paddingBottom) || 0;
       const pl = parseFloat(cs.paddingLeft) || 0;
 
-      // Element box
       drawBox(
         o,
         rect,
@@ -73,7 +135,6 @@ export default defineContentScript({
         "1px solid rgba(249,115,22,0.6)",
       );
 
-      // Padding (inner, green)
       if (pt > 0)
         drawBox(
           o,
@@ -113,7 +174,6 @@ export default defineContentScript({
           "none",
         );
 
-      // Margin (outer, blue)
       if (mt > 0)
         drawBox(
           o,
@@ -153,7 +213,6 @@ export default defineContentScript({
           "none",
         );
 
-      // Dimension labels on the element
       drawLabel(
         o,
         rect.left + rect.width / 2,
@@ -169,7 +228,6 @@ export default defineContentScript({
         "#f97316",
       );
 
-      // Tooltip
       const lines: string[] = [];
       lines.push(
         `<b style="color:#f97316">${el.tagName.toLowerCase()}${el.id ? "#" + el.id : ""}</b>`,
@@ -177,16 +235,14 @@ export default defineContentScript({
       lines.push(
         `<span style="color:#71717a">size</span> ${Math.round(rect.width)} × ${Math.round(rect.height)}`,
       );
-      if (mt || mr || mb || ml) {
+      if (mt || mr || mb || ml)
         lines.push(
           `<span style="color:#3b82f6">margin</span> ${mt} ${mr} ${mb} ${ml}`,
         );
-      }
-      if (pt || pr || pb || pl) {
+      if (pt || pr || pb || pl)
         lines.push(
           `<span style="color:#22c55e">padding</span> ${pt} ${pr} ${pb} ${pl}`,
         );
-      }
 
       const gap = cs.gap && cs.gap !== "normal" ? cs.gap : null;
       const display = cs.display;
@@ -196,21 +252,14 @@ export default defineContentScript({
         display === "grid" ||
         display === "inline-grid";
 
-      // ── Figma-style gap visualization ──
-      if (gap && isFlexOrGrid) {
-        drawGapIndicators(o, el, cs);
-      }
-
+      if (gap && isFlexOrGrid) drawGapIndicators(o, el, cs);
       if (gap) lines.push(`<span style="color:#d946ef">gap</span> ${gap}`);
-
-      if (isFlexOrGrid) {
+      if (isFlexOrGrid)
         lines.push(`<span style="color:#71717a">display</span> ${display}`);
-      }
 
       t.innerHTML = lines.join("<br>");
       t.style.opacity = "1";
 
-      // Position tooltip
       let tx = rect.right + 12;
       let ty = rect.top;
       if (tx + 280 > window.innerWidth) tx = rect.left - 280 - 12;
@@ -240,8 +289,6 @@ export default defineContentScript({
 
       const isColumn =
         cs.flexDirection === "column" || cs.flexDirection === "column-reverse";
-
-      // For grid, detect direction from child positions
       let direction: "row" | "column" = "row";
       if (isColumn) {
         direction = "column";
@@ -258,7 +305,6 @@ export default defineContentScript({
       for (let i = 0; i < children.length - 1; i++) {
         const a = children[i].getBoundingClientRect();
         const b = children[i + 1].getBoundingClientRect();
-
         let gapRect: {
           top: number;
           left: number;
@@ -316,15 +362,9 @@ export default defineContentScript({
       direction: "row" | "column",
     ) {
       const d = document.createElement("div");
-      // Hatched pattern via repeating-linear-gradient — Figma style
       const angle = direction === "row" ? "90deg" : "0deg";
       const stripe = `repeating-linear-gradient(${angle},rgba(217,70,239,0.12) 0px,rgba(217,70,239,0.12) 2px,rgba(217,70,239,0.04) 2px,rgba(217,70,239,0.04) 6px)`;
-      d.style.cssText = `
-        position:fixed;top:${r.top}px;left:${r.left}px;width:${r.width}px;height:${r.height}px;
-        background:${stripe};
-        border:1px dashed rgba(217,70,239,0.5);
-        pointer-events:none;
-      `;
+      d.style.cssText = `position:fixed;top:${r.top}px;left:${r.left}px;width:${r.width}px;height:${r.height}px;background:${stripe};border:1px dashed rgba(217,70,239,0.5);pointer-events:none;`;
       parent.appendChild(d);
     }
 
@@ -348,12 +388,7 @@ export default defineContentScript({
     ) {
       const d = document.createElement("div");
       d.textContent = text;
-      d.style.cssText = `
-        position:fixed;left:${x}px;top:${y}px;transform:translate(-50%,-50%);
-        font-family:'DM Mono',monospace;font-size:10px;font-variant-numeric:tabular-nums;
-        color:${color};background:#0e0f11;padding:1px 4px;border-radius:3px;
-        border:1px solid ${color}44;pointer-events:none;white-space:nowrap;
-      `;
+      d.style.cssText = `position:fixed;left:${x}px;top:${y}px;transform:translate(-50%,-50%);font-family:'DM Mono',monospace;font-size:10px;font-variant-numeric:tabular-nums;color:${color};background:#0e0f11;padding:1px 4px;border-radius:3px;border:1px solid ${color}44;pointer-events:none;white-space:nowrap;`;
       parent.appendChild(d);
     }
 
@@ -377,13 +412,11 @@ export default defineContentScript({
 
       const ratio = contrastRatio(relativeLuminance(fg), relativeLuminance(bg));
       const ratioStr = ratio.toFixed(2);
-
       const aaLarge = ratio >= 3;
       const aaNormal = ratio >= 4.5;
       const aaaLarge = ratio >= 4.5;
       const aaaNormal = ratio >= 7;
 
-      // Highlight the element
       drawBox(
         o,
         rect,
@@ -393,7 +426,6 @@ export default defineContentScript({
 
       const fgHex = rgbToHex(fg);
       const bgHex = rgbToHex(bg);
-
       const pass = (v: boolean) =>
         v
           ? '<span style="color:#22c55e">Pass</span>'
@@ -426,8 +458,7 @@ export default defineContentScript({
     // ── Color utilities ──
     function parseColor(str: string): [number, number, number] | null {
       const m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-      if (m) return [+m[1], +m[2], +m[3]];
-      return null;
+      return m ? [+m[1], +m[2], +m[3]] : null;
     }
 
     function getEffectiveBackground(
@@ -443,14 +474,13 @@ export default defineContentScript({
         }
         current = current.parentElement;
       }
-      return [255, 255, 255]; // fallback white
+      return [255, 255, 255];
     }
 
     function parseAlpha(str: string): number {
       const m = str.match(/rgba\(\d+,\s*\d+,\s*\d+,\s*([\d.]+)\)/);
       if (m) return parseFloat(m[1]);
-      if (str.startsWith("rgb(")) return 1;
-      return 0;
+      return str.startsWith("rgb(") ? 1 : 0;
     }
 
     function relativeLuminance([r, g, b]: [number, number, number]): number {
@@ -474,8 +504,6 @@ export default defineContentScript({
     }
 
     // ── Radius audit mode ──
-    let radiusAbort = false;
-
     function auditRadius() {
       const o = ensureOverlay();
       const t = ensureTooltip();
@@ -486,7 +514,6 @@ export default defineContentScript({
       const totalNodes = all.length;
       let cursor = 0;
       const BATCH = 80;
-
       const entries: { radius: string; rect: DOMRect }[] = [];
       const groups = new Map<string, number>();
 
@@ -501,7 +528,6 @@ export default defineContentScript({
         text: "#f59e0b",
       };
 
-      // Show scanning status immediately
       t.style.opacity = "1";
       t.style.left = "12px";
       t.style.bottom = "12px";
@@ -513,18 +539,15 @@ export default defineContentScript({
         const pct =
           totalNodes > 0 ? Math.round((scanned / totalNodes) * 100) : 0;
         const done = scanned >= totalNodes;
-
         const sorted = [...groups.entries()].sort((a, b) => b[1] - a[1]);
         const consistentSet = buildConsistentSet(sorted, entries.length);
 
         const lines: string[] = [];
         lines.push(`<b style="color:#f97316">Radius Audit</b>`);
-
         if (!done) {
           lines.push(
             `<span style="color:#71717a">Scanning\u2026 ${pct}% <span style="font-variant-numeric:tabular-nums">(${entries.length} found)</span></span>`,
           );
-          // Progress bar
           lines.push(
             `<span style="display:block;height:3px;border-radius:2px;background:#2a2c32;margin:4px 0;overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:#f97316;border-radius:2px"></span></span>`,
           );
@@ -533,7 +556,6 @@ export default defineContentScript({
             `<span style="color:#71717a">${entries.length} elements with border-radius</span>`,
           );
         }
-
         if (sorted.length > 0) {
           lines.push("");
           for (const [val, count] of sorted) {
@@ -546,27 +568,22 @@ export default defineContentScript({
             );
           }
         }
-
         if (done && entries.length > 0) {
           const inconsistentCount = entries.filter(
             (e) => !consistentSet.has(e.radius),
           ).length;
           lines.push("");
-          if (inconsistentCount > 0) {
-            lines.push(
-              `<span style="color:#f59e0b">${inconsistentCount} inconsistent</span>`,
-            );
-          } else {
-            lines.push(`<span style="color:#14b8a6">All consistent</span>`);
-          }
+          lines.push(
+            inconsistentCount > 0
+              ? `<span style="color:#f59e0b">${inconsistentCount} inconsistent</span>`
+              : `<span style="color:#14b8a6">All consistent</span>`,
+          );
         }
-
         if (done && entries.length === 0) {
           lines.push(
             `<span style="color:#71717a">No border-radius found</span>`,
           );
         }
-
         t.innerHTML = lines.join("<br>");
       }
 
@@ -581,18 +598,15 @@ export default defineContentScript({
 
       function processBatch() {
         if (radiusAbort) return;
-
         const end = Math.min(cursor + BATCH, totalNodes);
-
         for (let i = cursor; i < end; i++) {
           const el = all[i];
           if ((el as HTMLElement).id?.startsWith("__spacer")) continue;
+          if (isToolbarElement(el)) continue;
           const cs = getComputedStyle(el);
           if (cs.display === "none" || cs.visibility === "hidden") continue;
-
           const r = cs.borderRadius;
           if (!r || r === "0px") continue;
-
           const rect = el.getBoundingClientRect();
           if (rect.width === 0 || rect.height === 0) continue;
           if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
@@ -602,25 +616,18 @@ export default defineContentScript({
           entries.push({ radius: normalized, rect });
           groups.set(normalized, (groups.get(normalized) || 0) + 1);
 
-          // Draw immediately — we'll use a temporary "unknown" color,
-          // but since most pages have few unique values this is fine
-          // We color based on current frequency knowledge
           const sorted = [...groups.entries()].sort((a, b) => b[1] - a[1]);
           const consistentSet = buildConsistentSet(sorted, entries.length);
           const isConsistent = consistentSet.has(normalized);
           const c = isConsistent ? COLOR_OK : COLOR_WARN;
-
           drawRadiusOutline(o, rect, c.border, c.bg);
           drawLabel(o, rect.left + 10, rect.top + 10, normalized, c.text);
         }
-
         cursor = end;
         updateTooltip(cursor);
-
         if (cursor < totalNodes) {
           setTimeout(processBatch, 0);
         } else {
-          // Final pass: recolor all overlays now that we know the full distribution
           recolorAll();
         }
       }
@@ -629,7 +636,6 @@ export default defineContentScript({
         o.innerHTML = "";
         const sorted = [...groups.entries()].sort((a, b) => b[1] - a[1]);
         const consistentSet = buildConsistentSet(sorted, entries.length);
-
         for (const entry of entries) {
           const isConsistent = consistentSet.has(entry.radius);
           const c = isConsistent ? COLOR_OK : COLOR_WARN;
@@ -642,38 +648,28 @@ export default defineContentScript({
             c.text,
           );
         }
-
         updateTooltip(totalNodes);
       }
 
-      // Kick off
       setTimeout(processBatch, 0);
     }
 
     function normalizeRadius(r: string): string {
-      // "8px 8px 8px 8px" → "8px", keep shorthand when all corners match
       const parts = r
         .split(/\s+\/?\s*/)
         .map((p) => p.trim())
         .filter(Boolean);
       if (parts.length === 0) return r;
-
-      // Handle "X / Y" syntax (elliptical)
       if (r.includes("/")) return r;
-
       const unique = [...new Set(parts)];
       if (unique.length === 1) return unique[0];
-
-      // "8px 8px 8px 8px" → "8px"
       if (
         parts.length === 4 &&
         parts[0] === parts[1] &&
         parts[1] === parts[2] &&
         parts[2] === parts[3]
-      ) {
+      )
         return parts[0];
-      }
-
       return r;
     }
 
@@ -684,15 +680,7 @@ export default defineContentScript({
       bgColor: string,
     ) {
       const d = document.createElement("div");
-      d.style.cssText = `
-        position:fixed;
-        top:${rect.top}px;left:${rect.left}px;
-        width:${rect.width}px;height:${rect.height}px;
-        background:${bgColor};
-        border:1.5px solid ${borderColor};
-        border-radius:inherit;
-        pointer-events:none;
-      `;
+      d.style.cssText = `position:fixed;top:${rect.top}px;left:${rect.left}px;width:${rect.width}px;height:${rect.height}px;background:${bgColor};border:1.5px solid ${borderColor};border-radius:inherit;pointer-events:none;`;
       parent.appendChild(d);
     }
 
@@ -704,7 +692,8 @@ export default defineContentScript({
         !target ||
         target === overlay ||
         target === tooltip ||
-        target.id?.startsWith("__spacer")
+        target.id?.startsWith("__spacer") ||
+        isToolbarElement(target)
       )
         return;
       if (target === lastTarget) return;
@@ -721,7 +710,8 @@ export default defineContentScript({
         !target ||
         target === overlay ||
         target === tooltip ||
-        target.id?.startsWith("__spacer")
+        target.id?.startsWith("__spacer") ||
+        isToolbarElement(target)
       )
         return;
       checkContrast(target);
@@ -731,7 +721,6 @@ export default defineContentScript({
       cleanup();
       mode = newMode;
       if (mode === "off") return;
-
       if (mode === "spacing") {
         document.addEventListener("mousemove", onMouseMove, true);
       } else if (mode === "contrast") {
@@ -742,18 +731,29 @@ export default defineContentScript({
       }
     }
 
-    // ── Message listener ──
+    // ── Message listener (from background / popup) ──
+    let toolbarVisible = true;
+
     browser.runtime.onMessage.addListener((msg: any) => {
-      if (msg.type === "SET_MODE") {
-        activate(msg.mode);
-        return;
+      if (msg.type === "TOGGLE_TOOLBAR") {
+        toolbarVisible = !toolbarVisible;
+        if (toolbarVisible) {
+          toolbarUi.shadowHost.style.display = "block";
+        } else {
+          activate("off");
+          toolbarUi.shadowHost.style.display = "none";
+        }
+        return Promise.resolve({ toolbarVisible });
       }
       if (msg.type === "GET_STATE") {
-        return Promise.resolve({ mode });
+        return Promise.resolve({ mode, toolbarVisible });
       }
     });
 
     // Cleanup on context invalidated
-    ctx.onInvalidated(() => cleanup());
+    ctx.onInvalidated(() => {
+      cleanup();
+      toolbarUi.remove();
+    });
   },
 });

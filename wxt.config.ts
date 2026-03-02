@@ -11,5 +11,6 @@ export default defineConfig({
     description:
       "Inspect spacing between elements and check color contrast accessibility on any page.",
     permissions: ["activeTab"],
+    action: {},
   },
 });
